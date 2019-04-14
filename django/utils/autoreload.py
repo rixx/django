@@ -370,7 +370,7 @@ class WatchmanReloader(BaseReloader):
 
     @cached_property
     def client(self):
-        return pywatchman.client()
+        return pywatchman.client(timeout=0.2)
 
     def _watch_root(self, root):
         # In practice this shouldn't occur, however, it's possible that a
@@ -528,7 +528,7 @@ class WatchmanReloader(BaseReloader):
     def check_availability(cls):
         if not pywatchman:
             raise WatchmanUnavailable('pywatchman not installed.')
-        client = pywatchman.client(timeout=0.01)
+        client = pywatchman.client(timeout=0.2)
         try:
             result = client.capabilityCheck()
         except Exception:
