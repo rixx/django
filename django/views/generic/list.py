@@ -2,6 +2,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.paginator import InvalidPage, Paginator
 from django.db.models.query import QuerySet
 from django.http import Http404
+from django.utils.asyncio import async_unsafe
 from django.utils.translation import gettext as _
 from django.views.generic.base import ContextMixin, TemplateResponseMixin, View
 
@@ -9,6 +10,7 @@ from django.views.generic.base import ContextMixin, TemplateResponseMixin, View
 class MultipleObjectMixin(ContextMixin):
     """A mixin for views manipulating multiple objects."""
     allow_empty = True
+    async_enabled = True
     queryset = None
     model = None
     paginate_by = None
@@ -18,6 +20,7 @@ class MultipleObjectMixin(ContextMixin):
     page_kwarg = 'page'
     ordering = None
 
+    @async_unsafe
     def get_queryset(self):
         """
         Return the list of items for this view.
@@ -138,6 +141,7 @@ class MultipleObjectMixin(ContextMixin):
 
 class BaseListView(MultipleObjectMixin, View):
     """A base view for displaying a list of objects."""
+    async_enabled = True
     def get(self, request, *args, **kwargs):
         self.object_list = self.get_queryset()
         allow_empty = self.get_allow_empty()
@@ -161,6 +165,7 @@ class BaseListView(MultipleObjectMixin, View):
 class MultipleObjectTemplateResponseMixin(TemplateResponseMixin):
     """Mixin for responding with a template and list of objects."""
     template_name_suffix = '_list'
+    async_enabled = True
 
     def get_template_names(self):
         """
@@ -192,6 +197,7 @@ class MultipleObjectTemplateResponseMixin(TemplateResponseMixin):
 
 
 class ListView(MultipleObjectTemplateResponseMixin, BaseListView):
+    async_enabled = True
     """
     Render some list of objects, set by `self.model` or `self.queryset`.
     `self.queryset` can actually be any iterable of items, not just a queryset.

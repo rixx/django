@@ -1,5 +1,8 @@
+import asyncio
 import logging
 from functools import update_wrapper
+
+from asgiref.sync import sync_to_async
 
 from django.core.exceptions import ImproperlyConfigured
 from django.http import (
@@ -8,7 +11,9 @@ from django.http import (
 )
 from django.template.response import TemplateResponse
 from django.urls import reverse
+from django.utils.asyncio import async_unsafe
 from django.utils.decorators import classonlymethod
+
 
 logger = logging.getLogger('django.request')
 
@@ -19,6 +24,7 @@ class ContextMixin:
     get_context_data() as the template context.
     """
     extra_context = None
+    async_enabled = True
 
     def get_context_data(self, **kwargs):
         kwargs.setdefault('view', self)
@@ -34,6 +40,22 @@ class View:
     """
 
     http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace']
+    async_enabled = True
+
+    def __init_subclass__(cls, *args, **kwargs):
+        if not cls.__dict__.get('async_enabled') is True:
+            cls._run_async = False
+            return
+        non_async_parents = [
+            parent for parent in cls.__mro__
+            if parent.__dict__.get("async_enabled", False) is False
+        ]
+        if non_async_parents:
+            raise TypeError("You tried to create the async-capable class %s, "
+                            "but not all of its base classes are async-capable: "
+                            % (cls.__name__, ', '.join(parent.__name__ for parent in non_async_parents)))
+        super().__init_subclass__()
+        View.dispatch = View.async_dispatch
 
     def __init__(self, **kwargs):
         """
@@ -58,17 +80,22 @@ class View:
                                 "only accepts arguments that are already "
                                 "attributes of the class." % (cls.__name__, key))
 
-        def view(request, *args, **kwargs):
+        async def view(request, *args, **kwargs):
             self = cls(**initkwargs)
             if hasattr(self, 'get') and not hasattr(self, 'head'):
                 self.head = self.get
-            self.setup(request, *args, **kwargs)
+            if not asyncio.iscoroutinefunction(self.setup):
+                await sync_to_async(self.setup)(request, *args, **kwargs)
+            else:
+                await self.setup(request, *args, **kwargs)
             if not hasattr(self, 'request'):
                 raise AttributeError(
                     "%s instance has no 'request' attribute. Did you override "
                     "setup() and forget to call super()?" % cls.__name__
                 )
-            return self.dispatch(request, *args, **kwargs)
+            if not asyncio.iscoroutinefunction(self.dispatch):
+                return await sync_to_async(self.dispatch)(request, *args, **kwargs)
+            return await self.dispatch(request, *args, **kwargs)
         view.view_class = cls
         view.view_initkwargs = initkwargs
 
@@ -80,12 +107,14 @@ class View:
         update_wrapper(view, cls.dispatch, assigned=())
         return view
 
+    @async_unsafe
     def setup(self, request, *args, **kwargs):
         """Initialize attributes shared by all view methods."""
         self.request = request
         self.args = args
         self.kwargs = kwargs
 
+    @async_unsafe
     def dispatch(self, request, *args, **kwargs):
         # Try to dispatch to the right method; if a method doesn't exist,
         # defer to the error handler. Also defer to the error handler if the
@@ -95,6 +124,16 @@ class View:
         else:
             handler = self.http_method_not_allowed
         return handler(request, *args, **kwargs)
+
+    async def async_dispatch(self, request, *args, **kwargs):
+        """Will replace dispatch on async_enabled views."""
+        if request.method.lower() in self.http_method_names:
+            handler = getattr(self, request.method.lower(), self.http_method_not_allowed)
+        else:
+            handler = self.http_method_not_allowed
+        if not asyncio.iscoroutinefunction(handler):
+            return await sync_to_async(handler)(request, *args, **kwargs)
+        return await handler(request, *args, **kwargs)
 
     def http_method_not_allowed(self, request, *args, **kwargs):
         logger.warning(
@@ -120,6 +159,7 @@ class TemplateResponseMixin:
     template_engine = None
     response_class = TemplateResponse
     content_type = None
+    async_enabled = True
 
     def render_to_response(self, context, **response_kwargs):
         """
@@ -154,6 +194,9 @@ class TemplateView(TemplateResponseMixin, ContextMixin, View):
     """
     Render a template. Pass keyword arguments from the URLconf to the context.
     """
+    async_enabled = True
+
+    @async_unsafe
     def get(self, request, *args, **kwargs):
         context = self.get_context_data(**kwargs)
         return self.render_to_response(context)
@@ -184,6 +227,7 @@ class RedirectView(View):
             url = "%s?%s" % (url, args)
         return url
 
+    @async_unsafe
     def get(self, request, *args, **kwargs):
         url = self.get_redirect_url(*args, **kwargs)
         if url:
@@ -198,6 +242,7 @@ class RedirectView(View):
             )
             return HttpResponseGone()
 
+    @async_unsafe  # TODO: Add async_unsafe everywhere
     def head(self, request, *args, **kwargs):
         return self.get(request, *args, **kwargs)
 
