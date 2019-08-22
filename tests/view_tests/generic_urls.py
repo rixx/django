@@ -42,3 +42,10 @@ urlpatterns += [
 urlpatterns += [
     path('json/response/', views.json_response_view),
 ]
+
+# async views
+urlpatterns += [
+    path('async/simple/', views.async_view),
+    path('async/class/', views.AsyncClassView.as_view()),
+    path('async/custom_class/', views.AsyncClassCustomView()),
+]
